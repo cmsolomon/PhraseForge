@@ -47,6 +47,7 @@ const WORDNET_ARCHIVE: &str = "WNdb-3.0.tar.gz";
 const HERMIT_DAVES_FREQUENTLY_USED_WORD_LIST_URL: &str =
     "https://raw.githubusercontent.com/hermitdave/FrequencyWords/refs/heads/master/content/2018/en/en_full.txt";
 const HERMIT_DAVES_FREQUENTLY_USED_WORD_LIST_ARCHIVE: &str = "en_full.txt";
+const MINIMUM_WORD_LENGTH: usize = 4;
 
 fn get_data_dir() -> PathBuf {
     let proj_dirs =
@@ -96,11 +97,8 @@ fn generate_word_list(dictionary: &PathBuf, master_word_list: &PathBuf) -> Vec<S
         // Extract the first word and check if it starts with an ASCII letter
         let first_word = line.split_whitespace().next().unwrap_or("").to_string();
         if !first_word.is_empty()
-            && first_word
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_alphabetic())
-                .unwrap_or(false)
+            && first_word.len() >= MINIMUM_WORD_LENGTH
+            && first_word.chars().all(|c| c.is_ascii_alphabetic())
         {
             dictionary_words.insert(first_word);
         }
@@ -139,7 +137,7 @@ fn word_lists_exist(data_dir: &PathBuf) -> bool {
 }
 
 fn generate_word_lists(data_dir: &PathBuf) {
-    let word_files = vec![
+    let word_files = [
         ("index.adj", "adjectives.txt"),
         ("index.noun", "nouns.txt"),
         ("index.verb", "verbs.txt"),
@@ -147,11 +145,49 @@ fn generate_word_lists(data_dir: &PathBuf) {
     ];
 
     let dict_dir = data_dir.join("dict");
-    let word_list = data_dir.join(HERMIT_DAVES_FREQUENTLY_USED_WORD_LIST_ARCHIVE);
+    let word_list_path = data_dir.join(HERMIT_DAVES_FREQUENTLY_USED_WORD_LIST_ARCHIVE);
+
+    let mut word_lists = std::collections::HashMap::new();
+
+    // Load all word lists into memory
     for (dictionary_file, output_file) in &word_files {
         let dictionary_path = dict_dir.join(dictionary_file);
+        let words = generate_word_list(&dictionary_path, &word_list_path);
+        word_lists.insert(*output_file, words);
+    }
+
+    // Post-process nouns to exclude any words found in other categories
+    let nouns = word_lists
+        .remove("nouns.txt")
+        .unwrap_or_default();
+
+    let mut conflicting_words = HashSet::new();
+    for key in ["adjectives.txt", "verbs.txt", "adverbs.txt"] {
+        if let Some(list) = word_lists.get(key) {
+            for line in list {
+                if let Some(word) = line.split_whitespace().next() {
+                    conflicting_words.insert(word.to_string());
+                }
+            }
+        }
+    }
+
+    let filtered_nouns: Vec<String> = nouns
+        .into_iter()
+        .filter(|line| {
+            if let Some(word) = line.split_whitespace().next() {
+                !conflicting_words.contains(word)
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    word_lists.insert("nouns.txt", filtered_nouns);
+
+    // Save all word lists
+    for (output_file, words) in word_lists {
         let out_path = data_dir.join(output_file);
-        let words = generate_word_list(&dictionary_path, &word_list);
         save_word_list(&words, &out_path);
     }
 }
